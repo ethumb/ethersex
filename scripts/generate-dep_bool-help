@@ -1,8 +1,43 @@
-#! /bin/sh
+#! /bin/bash
 cat `find -name "*config*.in"` | grep -e bool | \
   sed -e 's/\$//g' -e 's/dep_bool_[^ ]*/dep_bool/' -e "s/\(['\"]\) */\1/" > DBlist
 rm -f DBvars
 
+#borrowed from scripts/Menuconfig
+function extract_help () {
+  if [ -f doc/Configure.help ]; then
+     #first es2cape regexp special characters in the argument:
+     var=$(echo "$1"|sed 's/[][\/.^$*]/\\&/g')
+     #now pick out the right help text:
+     text=$(sed -n "/^$var[ 	]*\$/,\${
+                        /^$var[ 	]*\$/c\\
+${var}:\\
+
+                        /^#/b
+                        /^[^ 	]/q
+                        s/^  //
+                        /<file:\\([^>]*\\)>/s//\\1/g
+                        p
+                    }" doc/Configure.help)
+
+     if [ -z "$text" ]; then
+          echo "============help text in doc/Configure.help:=============="
+          echo "There is no help section."
+          echo "=========================================================="
+          return 1
+     else
+          echo "============help text in doc/Configure.help:=============="
+          echo "$text"
+          echo "=========================================================="
+     fi
+  else
+         echo "There is no doc/Confugre.help file."
+         return 1
+  fi
+}
+
+
+#ignore bool definitions
 function define_bool() { true; }
 
 function bool() {
@@ -16,7 +51,6 @@ function dep_bool() {
 . ./DBlist
 . ./DBvars
 
-rm -f DBvars
 
 # what a hack, sorry ...
 y="<< nothing >>"
@@ -26,11 +60,48 @@ PORTIO_SUPPORT="Full-featured I/O abstraction model (Port I/O)"
 
 function bool() { true; } 
 
-function dep_bool() {
-  grep -e "^$2" doc/Configure.help -q && return
-  echo "$1"; shift
-  echo "$1"; shift
 
+# $1 = description for VAR
+# $2 = VAR
+# $3...$X = dependencies / VAR's for other modules
+
+
+rm -f DBdep
+#bild DataBase with dependencies
+function dep_bool() {
+  echo -n "$2 "  >> DBdep
+  shift; shift #now only dependencies are left
+  while test -n "$1"; do  #check if there are any dependency VAR's left
+    echo -n "$1 "  >> DBdep
+    shift
+  done
+  echo "" >> DBdep
+}
+. ./DBlist
+
+
+
+function dep_bool() {
+  #echo "running for $2" >&2
+
+  extract_help $2
+
+  grep -e "^$2" doc/Configure.help -q # && return
+  echo "${2}: $1";
+
+  grep -i $2 DBdep > DBdep_relevant
+  echo "  Provides for:"
+  while read myline ;  do
+        #find this VAR, not at beginning of line therefore in dependency VAR's
+        match=`echo $myline | grep -v -e "^$2" | grep $2 | cut -d " " -f 1`
+        if [ -n "$match" ]; then
+            get_cmd='echo $'"$match"
+            value="`eval $get_cmd`"
+            echo "   * $value ($match)"
+        fi
+  done < DBdep_relevant
+
+  shift; shift
   echo "  Depends on: "
   while test -n "$1"; do
     get_cmd='echo $'"$1"
@@ -41,9 +112,17 @@ function dep_bool() {
   done
 
   echo ""
-  echo "  There's unfortunately no help available for this item."
   echo ""
 }
-
 . ./DBlist
-rm -f DBlist
+
+
+
+cleanup(){
+    rm -f DBlist
+    rm -f DBvars
+    rm -f DBdep
+    rm -f DBdep_relevant
+}
+
+cleanup
